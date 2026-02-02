@@ -37,5 +37,9 @@ export const createIngestionRouter = (
 		ingestionController.triggerForceSync
 	);
 
+	// Stats endpoints
+	router.get('/stats/all', requirePermission('read', 'ingestion'), ingestionController.getAllStats);
+	router.get('/:id/stats', requirePermission('read', 'ingestion'), ingestionController.getStats);
+
 	return router;
 };

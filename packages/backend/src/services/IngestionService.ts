@@ -7,8 +7,9 @@ import type {
 	IngestionCredentials,
 	IngestionProvider,
 	PendingEmail,
+	IngestionSourceStats,
 } from '@open-archiver/types';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sum, count, min, max, lt } from 'drizzle-orm';
 import { CryptoService } from './CryptoService';
 import { EmailProviderFactory } from './EmailProviderFactory';
 import { ingestionQueue } from '../jobs/queues';
@@ -530,5 +531,161 @@ export class IngestionService {
 			});
 			return null;
 		}
+	}
+
+	/**
+	 * Get statistics for a single ingestion source
+	 */
+	public static async getStats(id: string): Promise<IngestionSourceStats> {
+		const source = await this.findById(id);
+		if (!source) {
+			throw new Error('Ingestion source not found');
+		}
+
+		const [stats] = await db
+			.select({
+				emailCount: count(archivedEmails.id),
+				totalSizeBytes: sum(archivedEmails.sizeBytes),
+				oldestEmailDate: min(archivedEmails.sentAt),
+				newestEmailDate: max(archivedEmails.sentAt),
+			})
+			.from(archivedEmails)
+			.where(eq(archivedEmails.ingestionSourceId, id));
+
+		const totalSizeBytes = Number(stats.totalSizeBytes) || 0;
+		const quotaLimitBytes = source.quotaLimitBytes ?? null;
+		const quotaUsedPercent = quotaLimitBytes
+			? Math.round((totalSizeBytes / quotaLimitBytes) * 100 * 100) / 100
+			: null;
+
+		return {
+			id: source.id,
+			name: source.name,
+			emailCount: stats.emailCount,
+			totalSizeBytes,
+			quotaLimitBytes,
+			quotaUsedPercent,
+			retentionDays: source.retentionDays ?? null,
+			oldestEmailDate: stats.oldestEmailDate,
+			newestEmailDate: stats.newestEmailDate,
+		};
+	}
+
+	/**
+	 * Get statistics for all ingestion sources the user has access to
+	 */
+	public static async getAllStats(userId: string): Promise<IngestionSourceStats[]> {
+		const sources = await this.findAll(userId);
+		const results: IngestionSourceStats[] = [];
+
+		for (const source of sources) {
+			try {
+				const stats = await this.getStats(source.id);
+				results.push(stats);
+			} catch (error) {
+				logger.error({ err: error, sourceId: source.id }, 'Failed to get stats for source');
+			}
+		}
+
+		return results;
+	}
+
+	/**
+	 * Delete emails older than the retention period for a given source.
+	 * Returns the number of deleted emails.
+	 */
+	public static async enforceRetention(
+		id: string,
+		actor: { id: string },
+		actorIp: string
+	): Promise<{ deletedCount: number }> {
+		checkDeletionEnabled();
+		const source = await this.findById(id);
+		if (!source) {
+			throw new Error('Ingestion source not found');
+		}
+
+		if (!source.retentionDays) {
+			// No retention policy, nothing to delete
+			return { deletedCount: 0 };
+		}
+
+		const cutoffDate = new Date();
+		cutoffDate.setDate(cutoffDate.getDate() - source.retentionDays);
+
+		// Find emails older than the cutoff date
+		const oldEmails = await db
+			.select({ id: archivedEmails.id })
+			.from(archivedEmails)
+			.where(
+				and(
+					eq(archivedEmails.ingestionSourceId, id),
+					lt(archivedEmails.sentAt, cutoffDate)
+				)
+			);
+
+		if (oldEmails.length === 0) {
+			return { deletedCount: 0 };
+		}
+
+		// Import ArchivedEmailService to delete emails
+		const { ArchivedEmailService } = await import('./ArchivedEmailService');
+		const actorUser = { id: actor.id } as any;
+
+		let deletedCount = 0;
+		for (const email of oldEmails) {
+			try {
+				await ArchivedEmailService.deleteArchivedEmail(email.id, actorUser, actorIp);
+				deletedCount++;
+			} catch (error) {
+				logger.error(
+					{ err: error, emailId: email.id, sourceId: id },
+					'Failed to delete email during retention enforcement'
+				);
+			}
+		}
+
+		logger.info(
+			{ sourceId: id, deletedCount, retentionDays: source.retentionDays },
+			'Retention enforcement completed'
+		);
+
+		return { deletedCount };
+	}
+
+	/**
+	 * Enforce retention for all sources that have a retention policy
+	 */
+	public static async enforceRetentionForAllSources(
+		actor: { id: string },
+		actorIp: string
+	): Promise<{ totalDeleted: number; sourcesProcessed: number; errors: string[] }> {
+		checkDeletionEnabled();
+		// Get all sources with retention policies
+		const sourcesWithRetention = await db
+			.select()
+			.from(ingestionSources)
+			.where(and());
+
+		let totalDeleted = 0;
+		let sourcesProcessed = 0;
+		const errors: string[] = [];
+
+		for (const sourceRow of sourcesWithRetention) {
+			const source = this.decryptSource(sourceRow);
+			if (!source || !source.retentionDays) continue;
+
+			try {
+				const result = await this.enforceRetention(source.id, actor, actorIp);
+				totalDeleted += result.deletedCount;
+				sourcesProcessed++;
+			} catch (error) {
+				const errorMsg = `Failed to enforce retention for source ${source.id}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+				errors.push(errorMsg);
+				logger.error({ err: error, sourceId: source.id }, 'Retention enforcement failed');
+			}
+		}
+
+		return { totalDeleted, sourcesProcessed, errors };
 	}
 }

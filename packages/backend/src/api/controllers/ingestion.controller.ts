@@ -5,6 +5,7 @@ import {
 	UpdateIngestionSourceDto,
 	IngestionSource,
 	SafeIngestionSource,
+	IngestionSourceStats,
 } from '@open-archiver/types';
 import { logger } from '../../config/logger';
 import { UserService } from '../../services/UserService';
@@ -195,6 +196,44 @@ export class IngestionController {
 			if (error instanceof Error && error.message === 'Ingestion source not found') {
 				return res.status(404).json({ message: req.t('ingestion.notFound') });
 			}
+			return res.status(500).json({ message: req.t('errors.internalServerError') });
+		}
+	};
+
+	/**
+	 * Get statistics for an ingestion source (email count, disk usage, quota usage, etc.)
+	 */
+	public getStats = async (req: Request, res: Response): Promise<Response> => {
+		try {
+			const { id } = req.params;
+			const userId = req.user?.sub;
+			if (!userId) {
+				return res.status(401).json({ message: req.t('errors.unauthorized') });
+			}
+			const stats = await IngestionService.getStats(id);
+			return res.status(200).json(stats);
+		} catch (error) {
+			console.error(`Get stats for ingestion source ${req.params.id} error:`, error);
+			if (error instanceof Error && error.message === 'Ingestion source not found') {
+				return res.status(404).json({ message: req.t('ingestion.notFound') });
+			}
+			return res.status(500).json({ message: req.t('errors.internalServerError') });
+		}
+	};
+
+	/**
+	 * Get statistics for all ingestion sources
+	 */
+	public getAllStats = async (req: Request, res: Response): Promise<Response> => {
+		try {
+			const userId = req.user?.sub;
+			if (!userId) {
+				return res.status(401).json({ message: req.t('errors.unauthorized') });
+			}
+			const stats = await IngestionService.getAllStats(userId);
+			return res.status(200).json(stats);
+		} catch (error) {
+			console.error('Get all ingestion source stats error:', error);
 			return res.status(500).json({ message: req.t('errors.internalServerError') });
 		}
 	};

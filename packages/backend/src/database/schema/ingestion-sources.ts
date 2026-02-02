@@ -1,4 +1,4 @@
-import { jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { jsonb, pgEnum, pgTable, text, timestamp, uuid, integer, bigint } from 'drizzle-orm/pg-core';
 import { users } from './users';
 import { relations } from 'drizzle-orm';
 
@@ -33,6 +33,10 @@ export const ingestionSources = pgTable('ingestion_sources', {
 	lastSyncFinishedAt: timestamp('last_sync_finished_at', { withTimezone: true }),
 	lastSyncStatusMessage: text('last_sync_status_message'),
 	syncState: jsonb('sync_state'),
+	// Retention: gün olarak saklama süresi; null = sınırsız
+	retentionDays: integer('retention_days'),
+	// Disk quota: byte cinsinden limit; null = sınırsız
+	quotaLimitBytes: bigint('quota_limit_bytes', { mode: 'number' }),
 	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 	updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

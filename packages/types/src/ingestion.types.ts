@@ -109,6 +109,10 @@ export interface IngestionSource {
 	lastSyncFinishedAt?: Date | null;
 	lastSyncStatusMessage?: string | null;
 	syncState?: SyncState | null;
+	/** Retention: gün olarak saklama süresi; null/undefined = sınırsız */
+	retentionDays?: number | null;
+	/** Disk quota: byte cinsinden limit; null/undefined = sınırsız */
+	quotaLimitBytes?: number | null;
 }
 
 /**
@@ -133,6 +137,23 @@ export interface UpdateIngestionSourceDto {
 	lastSyncFinishedAt?: Date;
 	lastSyncStatusMessage?: string;
 	syncState?: SyncState;
+	/** Retention: gün olarak saklama süresi; null = sınırsız */
+	retentionDays?: number | null;
+	/** Disk quota: byte cinsinden limit; null = sınırsız */
+	quotaLimitBytes?: number | null;
+}
+
+/** Ingestion source istatistikleri */
+export interface IngestionSourceStats {
+	id: string;
+	name: string;
+	emailCount: number;
+	totalSizeBytes: number;
+	quotaLimitBytes: number | null;
+	quotaUsedPercent: number | null;
+	retentionDays: number | null;
+	oldestEmailDate: Date | null;
+	newestEmailDate: Date | null;
 }
 
 export interface IContinuousSyncJob {
